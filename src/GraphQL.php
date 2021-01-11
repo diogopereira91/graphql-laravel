@@ -1,258 +1,288 @@
 <?php
+namespace GraphQLCore\GraphQL;
 
-declare(strict_types=1);
-
-namespace Rebing\GraphQL;
-
-use Error as PhpError;
-use Exception;
-use GraphQL\Error\DebugFlag;
-use GraphQL\Error\Error;
-use GraphQL\Error\FormattedError;
-use GraphQL\Executor\ExecutionResult;
+use GraphQLCore\GraphQL\Exception\SchemaNotFound;
+use GraphQLCore\GraphQL\Support\ListQuery;
+use GraphQLCore\GraphQL\Support\ListType;
 use GraphQL\GraphQL as GraphQLBase;
-use GraphQL\Type\Definition\ObjectType;
-use GraphQL\Type\Definition\Type;
 use GraphQL\Type\Schema;
-use Illuminate\Contracts\Container\Container;
-use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Support\Traits\Macroable;
-use Rebing\GraphQL\Error\AuthorizationError;
-use Rebing\GraphQL\Error\ValidationError;
-use Rebing\GraphQL\Exception\SchemaNotFound;
-use Rebing\GraphQL\Exception\TypeNotFound;
-use Rebing\GraphQL\Support\Contracts\TypeConvertible;
-use Rebing\GraphQL\Support\PaginationType;
+use GraphQL\Error\Error;
+use GraphQL\Executor\ExecutionResult;
+use GraphQL\Type\Definition\ObjectType;
+use GraphQLCore\GraphQL\Type\Definition\Type;
+use Illuminate\Support\Str;
+use Illuminate\Support\Arr;
 
-class GraphQL
+class GraphQL extends GraphQLHelper
 {
-    use Macroable;
-
-    /** @var Container */
-    protected $app;
-
-    /** @var array<array|Schema> */
-    protected $schemas = [];
-
     /**
-     * Maps GraphQL type names to their class name.
+     * Responsavel to return data that was collected to front-end.
      *
-     * @var array<string,object|string>
+     * @param array $opts - additional options, like 'schema', 'context' or 'operationName'
      */
-    protected $types = [];
-
-    /** @var Type[] */
-    protected $typesInstances = [];
-
-    public function __construct(Container $app)
+    public function query($query, $params = [], $opts = [])
     {
-        $this->app = $app;
-    }
+        $executionResult = $this->queryAndReturnResult($query, $params, $opts);
 
-    /**
-     * @param  Schema|array|string|null  $schema
-     * @return Schema
-     */
-    public function schema($schema = null): Schema
-    {
-        if ($schema instanceof Schema) {
-            return $schema;
+        $data         = config('api_structure');
+        $data['data'] = $executionResult->data;
+
+        // Add errors
+        if (!empty($executionResult->errors)) {
+            $errorFormatter = config('graphql.error_formatter', ['\GraphQLCore\GraphQL', 'formatError']);
+            $data['errors'] = array_map($errorFormatter, $executionResult->errors);
         }
 
-        $this->clearTypeInstances();
-
-        $schema = $this->getSchemaConfiguration($schema);
-
-        if ($schema instanceof Schema) {
-            return $schema;
-        }
-
-        $schemaQuery = $schema['query'] ?? [];
-        $schemaMutation = $schema['mutation'] ?? [];
-        $schemaSubscription = $schema['subscription'] ?? [];
-
-        $query = $this->objectType($schemaQuery, [
-            'name' => 'Query',
-        ]);
-
-        $mutation = $this->objectType($schemaMutation, [
-            'name' => 'Mutation',
-        ]);
-
-        $subscription = $this->objectType($schemaSubscription, [
-            'name' => 'Subscription',
-        ]);
-
-        return new Schema([
-            'query' => $query,
-            'mutation' => ! empty($schemaMutation) ? $mutation : null,
-            'subscription' => ! empty($schemaSubscription) ? $subscription : null,
-            'types' => function () use ($schema) {
-                $types = [];
-                $schemaTypes = $schema['types'] ?? [];
-
-                if ($schemaTypes) {
-                    foreach ($schemaTypes as $name => $type) {
-                        $opts = is_numeric($name) ? [] : ['name' => $name];
-                        $objectType = $this->objectType($type, $opts);
-                        $this->typesInstances[$name] = $objectType;
-                        $types[] = $objectType;
-                    }
-                } else {
-                    foreach ($this->getTypes() as $name => $type) {
-                        $types[] = $this->type($name);
-                    }
-                }
-
-                return $types;
-            },
-            'typeLoader' => config('graphql.lazyload_types', false)
-                ? function ($name) {
-                    return $this->type($name);
-                }
-                : null,
-        ]);
+        return $data;
     }
 
     /**
-     * @param string $query
-     * @param array|null  $params
-     * @param array  $opts   Additional options, like 'schema', 'context' or 'operationName'
+     * Process submitted query
      *
-     * @return array
+     * @param [type] $query
+     * @param array $params
+     * @param array $opts
+     * @return void
      */
-    public function query(string $query, ?array $params = [], array $opts = []): array
+    public function queryAndReturnResult($query, $params = [], $opts = [])
     {
-        return $this->queryAndReturnResult($query, $params, $opts)->toArray();
-    }
+        $context       = Arr::get($opts, 'context');
+        $schemaName    = Arr::get($opts, 'schema');
+        $operationName = Arr::get($opts, 'operationName');
 
-    /**
-     * @param  string  $query
-     * @param  array|null  $params
-     * @param  array  $opts  Additional options, like 'schema', 'context' or 'operationName'
-     * @return ExecutionResult
-     */
-    public function queryAndReturnResult(string $query, ?array $params = [], array $opts = []): ExecutionResult
-    {
-        $context = $opts['context'] ?? null;
-        $schemaName = $opts['schema'] ?? null;
-        $operationName = $opts['operationName'] ?? null;
-        $rootValue = $opts['rootValue'] ?? null;
+        $schema = $this->schema($schemaName, $query);
 
-        $schema = $this->schema($schemaName);
-
-        $errorFormatter = config('graphql.error_formatter', [static::class, 'formatError']);
-        $errorsHandler = config('graphql.errors_handler', [static::class, 'handleErrors']);
-        $defaultFieldResolver = config('graphql.defaultFieldResolver', null);
-
-        $result = GraphQLBase::executeQuery($schema, $query, $rootValue, $context, $params, $operationName, $defaultFieldResolver)
-            ->setErrorsHandler($errorsHandler)
-            ->setErrorFormatter($errorFormatter);
+        if (!is_null($schema)) {
+            $result = GraphQLBase::executeQuery($schema, $query, null, $context, $params, $operationName);
+        } else {
+            $result = new ExecutionResult(null, [new Error('Schema not found')]);
+        }
 
         return $result;
     }
 
-    public function addTypes(array $types): void
+    /**
+     * Schema builder. It get all schema
+     *
+     * @param [type] $schema
+     * @param string $query
+     * @return void
+     */
+    public function schema($schema = null, $query = '')
     {
-        foreach ($types as $name => $type) {
-            $this->addType($type, is_numeric($name) ? null : $name);
+        if ($schema instanceof Schema) {
+            return $schema;
+        }
+
+        $schemaName       = is_string($schema) ? $schema : config('graphql.default_schema', 'default');
+        $this->schemaName = $schemaName;
+
+        // Get custom types associated to grapqhl project.
+        $this->getCustomTypes();
+
+        // Check if the schema is defined
+        if (!is_array($schema) && !isset($this->schemas[$schemaName])) {
+            throw new SchemaNotFound('Schema ' . $schemaName . ' not found.');
+        }
+
+        // Get all classes associated to a specific schema
+        $schemaClasses = is_array($schema) ? $schema : $this->schemas[$schemaName];
+        $queryObj      = \GraphQL\Language\Parser::parse(new \GraphQL\Language\Source($query ?: '', 'GraphQL'));
+
+        $this->schemaTypes    = $schemaClasses['types'] ?? [];
+        $this->schemaSublists = $schemaClasses['sublists'] ?? [];
+
+        if (!empty($queryObj->definitions)) {
+            $schema = [];
+
+            foreach ($queryObj->definitions as $node) {
+                if (empty($node->operation)) {
+                    break;
+                }
+
+                $operationName = $node->operation;
+
+                if (!empty($node->selectionSet)) {
+                    $subNodes = $node->selectionSet->selections;
+
+                    foreach ($subNodes as $subNode) {
+                        if (!empty($schemaClasses[$operationName][$subNode->name->value])) {
+                            $schema[$operationName][$subNode->name->value] = $schemaClasses[$operationName][$subNode->name->value];
+                        }
+                    }
+                }
+            }
+        }
+
+        $schema = !empty($schema) ? $schema : $schemaClasses;
+
+        if (empty($schema['types'])) {
+            $globalTypes = config('graphql_types');
+
+            if (!is_null($globalTypes)) {
+                $schema['types'] = $globalTypes;
+            }
+        }
+
+        $schema = $this->getSchemaAvailableClasses($schemaName, $schema);
+
+        $schemaQuery        = Arr::get($schema, 'query', []);
+        $schemaMutation     = Arr::get($schema, 'mutation', []);
+        $schemaSubscription = Arr::get($schema, 'subscription', []);
+
+        if (empty($schemaQuery) && empty($schemaMutation) && empty($schemaSubscription)) {
+            return null;
+        }
+
+        $queryClasses = $this->objectType($schemaQuery, [
+            'name' => 'Query',
+        ]);
+
+        $mutationClasses = $this->objectType($schemaMutation, [
+            'name' => 'Mutation',
+        ]);
+
+        $subscriptionClasses = $this->objectType($schemaSubscription, [
+            'name' => 'Subscription',
+        ]);
+
+        $schemaParams = [
+            'query' => !empty($schemaQuery) ? $queryClasses : null,
+            'mutation' => !empty($schemaMutation) ? $mutationClasses : null,
+            'subscription' => !empty($schemaSubscription) ? $subscriptionClasses : null,
+        ];
+
+        if (!(strpos($query, 'IntrospectionQuery') !== false)) {
+            $listTypeLoader = ['typeLoader' => function ($name) {
+                try {
+                    $result = $this->type($name);
+                } catch (\Exception $e) {
+                    $list = [
+                        'OrderField',
+                        'Order',
+                        'Filters'
+                    ];
+
+                    $oriName = $name;
+
+                    foreach ($list as $listValue) {
+                        if (Str::startsWith($name, $listValue)) {
+                            $oriName = Str::replaceFirst($listValue, '', $oriName);
+                        }
+
+                    }
+
+                    $result = $this->sublist($oriName, $name);
+
+                    if (empty($result)) {
+                        throw new \Exception('Type ' . $name . ' not found.');
+                    }
+                }
+
+                return $result;
+            }];
+
+            $schemaParams = array_merge($schemaParams, $listTypeLoader);
+        } else {
+            // Just in case of graphql-playground
+            $schemaTypes = Arr::get($schema, 'types', []);
+
+            //Get the types either from the schema, or the global types.
+            $types = [];
+
+            foreach ($schemaTypes as $name => $type) {
+                $types[] = $this->type($name);
+            }
+
+            $schemaParams['types'] = $types;
+        }
+
+        return new Schema($schemaParams);
+    }
+
+    /**
+     * Load special types. These type are equivalent with Type::string().
+     * Ex: Type::password()
+     *
+     * @return array
+     */
+    public function loadSpecialTypes(String $type): void
+    {
+        $method   = strtolower($type);
+        $isMethod = method_exists('GraphQLCore\GraphQL\Type\Definition\Type', $method);
+
+        if ($isMethod) {
+            $obj = Type::$method();
+
+            $this->typesInstances[$obj->name] = $obj;
         }
     }
 
     /**
-     * @param  object|string  $class
-     * @param  string|null  $name
+     * Process types
+     *
+     * @param [type] $name
+     * @param boolean $fresh
+     * @return object
      */
-    public function addType($class, string $name = null): void
+    public function type($name, $fresh = false)
     {
-        if (! $name) {
-            $type = is_object($class) ? $class : $this->app->make($class);
-            $name = $type->name;
+        if (is_object($name)) {
+            $name = $this->updateTypes($name);
         }
 
-        $this->types[$name] = $class;
-    }
+        if (isset($this->schemaTypes[$name]) && !isset($this->typesInstances[$name])) {
+            $type     = $this->schemaTypes[$name];
+            $instance = $this->objectType($type);
 
-    public function type(string $name, bool $fresh = false): Type
-    {
-        $modifiers = [];
+            $name = $this->updateTypes($instance);
 
-        while (true) {
-            if (preg_match('/^(.+)!$/', $name, $matches)) {
-                $name = $matches[1];
-                array_unshift($modifiers, 'nonNull');
-            } elseif (preg_match('/^\[(.+)]$/', $name, $matches)) {
-                $name = $matches[1];
-                array_unshift($modifiers, 'listOf');
-            } else {
-                break;
-            }
+            // make sure that the global schema is replace with schema type.
+            $this->addType($type, $name);
         }
 
-        $type = $this->getType($name, $fresh);
+        $name = ucfirst(Str::camel($name));
 
-        foreach ($modifiers as $modifier) {
-            $type = Type::$modifier($type);
-        }
+        if (!isset($this->types[$name])) {
+            $this->loadSpecialTypes($name);
 
-        return $type;
-    }
-
-    public function getType(string $name, bool $fresh = false): Type
-    {
-        $standardTypes = Type::getStandardTypes();
-
-        if (in_array($name, $standardTypes)) {
-            return $standardTypes[$name];
-        }
-
-        if (! isset($this->types[$name])) {
-            $error = "Type $name not found.";
-
-            if (config('graphql.lazyload_types', false)) {
-                $error .= "\nCheck that the config array key for the type matches the name attribute in the type's class.\nIt is required when 'lazyload_types' is enabled";
+            if (empty($this->typesInstances[$name])) {
+                throw new \Exception('Type ' . $name . ' not found.');
             }
 
-            throw new TypeNotFound($error);
+            return $this->typesInstances[$name];
         }
 
-        if (! $fresh && isset($this->typesInstances[$name])) {
+        if (!$fresh && isset($this->typesInstances[$name])) {
             return $this->typesInstances[$name];
         }
 
         $type = $this->types[$name];
-        if (! is_object($type)) {
-            $type = $this->app->make($type);
+
+        if (!is_object($type)) {
+            $type = app($type);
+        }
+
+        if ($this->enabledScopes) {
+            $type->setRequestScope($this->scopeRequestString);
+            $type->setSchemaName($this->schemaName);
         }
 
         $instance = $type->toType();
+
         $this->typesInstances[$name] = $instance;
 
         return $instance;
     }
 
-    /**
-     * @param  ObjectType|array|string  $type
-     * @param  array<string,string>  $opts
-     * @return Type
-     */
-    public function objectType($type, array $opts = []): Type
+    public function objectType($type, $opts = [])
     {
         // If it's already an ObjectType, just update properties and return it.
         // If it's an array, assume it's an array of fields and build ObjectType
         // from it. Otherwise, build it from a string or an instance.
         $objectType = null;
-        if ($type instanceof ObjectType) {
-            $objectType = $type;
-            foreach ($opts as $key => $value) {
-                if (property_exists($objectType, $key)) {
-                    $objectType->{$key} = $value;
-                }
-                if (isset($objectType->config[$key])) {
-                    $objectType->config[$key] = $value;
-                }
-            }
-        } elseif (is_array($type)) {
+
+        if (is_array($type)) {
             $objectType = $this->buildObjectTypeFromFields($type, $opts);
         } else {
             $objectType = $this->buildObjectTypeFromClass($type, $opts);
@@ -262,251 +292,105 @@ class GraphQL
     }
 
     /**
-     * @param  ObjectType|string  $type
-     * @param  array  $opts
-     * @return Type
-     */
-    protected function buildObjectTypeFromClass($type, array $opts = []): Type
-    {
-        if (! is_object($type)) {
-            $type = $this->app->make($type);
-        }
-
-        if (! $type instanceof TypeConvertible) {
-            throw new TypeNotFound(
-                sprintf(
-                    'Unable to convert %s to a GraphQL type, please add/implement the interface %s',
-                    get_class($type),
-                    TypeConvertible::class
-                )
-            );
-        }
-
-        foreach ($opts as $key => $value) {
-            $type->{$key} = $value;
-        }
-
-        return $type->toType();
-    }
-
-    protected function buildObjectTypeFromFields(array $fields, array $opts = []): ObjectType
-    {
-        $typeFields = [];
-        foreach ($fields as $name => $field) {
-            if (is_string($field)) {
-                $field = $this->app->make($field);
-                $name = is_numeric($name) ? $field->name : $name;
-                $field->name = $name;
-                $field = $field->toArray();
-            } else {
-                $name = is_numeric($name) ? $field['name'] : $name;
-                $field['name'] = $name;
-            }
-            $typeFields[$name] = $field;
-        }
-
-        return new ObjectType(array_merge([
-            'fields' => $typeFields,
-        ], $opts));
-    }
-
-    /**
-     * @param  string  $name
-     * @param  Schema|array  $schema
-     */
-    public function addSchema(string $name, $schema): void
-    {
-        $this->mergeSchemas($name, $schema);
-    }
-
-    /**
-     * @param  string  $name
-     * @param  Schema|array  $schema
-     */
-    public function mergeSchemas(string $name, $schema): void
-    {
-        if (isset($this->schemas[$name]) && is_array($this->schemas[$name]) && is_array($schema)) {
-            $this->schemas[$name] = array_merge_recursive($this->schemas[$name], $schema);
-        } else {
-            $this->schemas[$name] = $schema;
-        }
-    }
-
-    public function clearType(string $name): void
-    {
-        if (isset($this->types[$name])) {
-            unset($this->types[$name]);
-        }
-    }
-
-    public function clearSchema(string $name): void
-    {
-        if (isset($this->schemas[$name])) {
-            unset($this->schemas[$name]);
-        }
-    }
-
-    public function clearTypes(): void
-    {
-        $this->types = [];
-    }
-
-    public function clearSchemas(): void
-    {
-        $this->schemas = [];
-    }
-
-    /**
-     * @return array<string,object|string>
-     */
-    public function getTypes(): array
-    {
-        return $this->types;
-    }
-
-    public function getSchemas(): array
-    {
-        return $this->schemas;
-    }
-
-    protected function clearTypeInstances(): void
-    {
-        $this->typesInstances = [];
-    }
-
-    public function paginate(string $typeName, string $customName = null): Type
-    {
-        $name = $customName ?: $typeName.'Pagination';
-
-        if (! isset($this->typesInstances[$name])) {
-            $paginationType = config('graphql.pagination_type', PaginationType::class);
-            $this->wrapType($typeName, $name, $paginationType);
-        }
-
-        return $this->typesInstances[$name];
-    }
-
-    /**
-     * To add customs result to the query or mutations.
+     * Load sublist
      *
-     * @param string $typeName         The original type name
-     * @param string $customTypeName   The new type name
-     * @param string $wrapperTypeClass The class to create the new type
-     *
-     * @return Type
+     * @param string $name
+     * @param string $specificObj
+     * @return object
      */
-    public function wrapType(string $typeName, string $customTypeName, string $wrapperTypeClass): Type
+    public function sublist(string $name, string $specificObj = '')
     {
-        if (! isset($this->typesInstances[$customTypeName])) {
-            $wrapperClass = new $wrapperTypeClass($typeName, $customTypeName);
-            $this->typesInstances[$customTypeName] = $wrapperClass;
-            $this->types[$customTypeName] = $wrapperClass;
+        $result = null;
+
+        if (!empty($this->schemaSublists[$name])) {
+            $type = $this->schemaSublists[$name];
+        } elseif (!empty($this->schemaName) && !empty($this->schemas[$this->schemaName])) {
+            $type = $this->schemas[$this->schemaName]['query'][$name];
         }
 
-        return $this->typesInstances[$customTypeName];
-    }
+        if (!empty($type)) {
+            $instance   = new $type();
+            $result     = $instance->getAttributes();
+            $objLoaded  = $this->objectType($result['args'], ['name' => $name]);
 
-    /**
-     * @see \GraphQL\Executor\ExecutionResult::setErrorFormatter
-     * @param  Error  $e
-     * @return array
-     */
-    public static function formatError(Error $e): array
-    {
-        $debug = config('app.debug') ? (DebugFlag::INCLUDE_DEBUG_MESSAGE | DebugFlag::INCLUDE_TRACE) : 0;
-        $formatter = FormattedError::prepareFormatter(null, $debug);
-        $error = $formatter($e);
+            $this->types[$name] = $type;
+            $this->typesInstances[$name] = $objLoaded;
 
-        $previous = $e->getPrevious();
-        if ($previous && $previous instanceof ValidationError) {
-            $error['extensions']['validation'] = $previous->getValidatorMessages();
-        }
+            $result = $this->listQuery($instance);
 
-        return $error;
-    }
+            if (!empty($specificObj)) {
+                $result = null;
 
-    /**
-     * @param  Error[]  $errors
-     * @param  callable  $formatter
-     * @return Error[]
-     */
-    public static function handleErrors(array $errors, callable $formatter): array
-    {
-        $handler = app()->make(ExceptionHandler::class);
-        foreach ($errors as $error) {
-            // Try to unwrap exception
-            $error = $error->getPrevious() ?: $error;
-
-            // Don't report certain GraphQL errors
-            if ($error instanceof ValidationError
-                || $error instanceof AuthorizationError
-                || ! (
-                    $error instanceof Exception
-                    || $error instanceof PhpError
-                )) {
-                continue;
+                if (!empty($this->typesInstances[$specificObj])) {
+                    $result = $this->typesInstances[$specificObj];
+                }
             }
-
-            if (! $error instanceof Exception) {
-                $error = new \Exception(
-                    $error->getMessage(),
-                    $error->getCode(),
-                    $error
-                );
-            }
-
-            $handler->report($error);
         }
 
-        return array_map($formatter, $errors);
+        return $result;
     }
 
     /**
      * Check if the schema expects a nest URI name and return the formatted version
      * Eg. 'user/me'
-     * will open the query path /graphql/user/me.
+     * will open the query path /graphql/user/me
      *
-     * @param  string  $name
-     * @param  string  $schemaParameterPattern
-     * @param  string  $queryRoute
+     * @param $name
+     * @param $schemaParameterPattern
+     * @param $queryRoute
      *
-     * @return string mixed
+     * @return mixed
      */
-    public static function routeNameTransformer(string $name, string $schemaParameterPattern, string $queryRoute): string
+    public static function routeNameTransformer($name, $schemaParameterPattern, $queryRoute)
     {
         $multiLevelPath = explode('/', $name);
-        $routeName = null;
+        $routeName      = null;
 
         if (count($multiLevelPath) > 1) {
-            if (Helpers::isLumen()) {
-                array_walk($multiLevelPath, function (string &$multiName): void {
-                    $multiName = "$multiName:$multiName";
-                });
-            }
-
             foreach ($multiLevelPath as $multiName) {
-                $routeName = ! $routeName ? null : $routeName.'/';
+                $routeName = !$routeName ? null : $routeName . '/';
                 $routeName =
-                    $routeName
-                    .preg_replace($schemaParameterPattern, '{'.$multiName.'}', $queryRoute);
+                $routeName
+                . preg_replace($schemaParameterPattern, '{' . $multiName . '}', $queryRoute);
             }
         }
 
-        return $routeName ?: preg_replace($schemaParameterPattern, '{'.(Helpers::isLumen() ? "$name:$name" : $name).'}', $queryRoute);
+        return $routeName ?: preg_replace($schemaParameterPattern, '{' . $name . '}', $queryRoute);
     }
 
     /**
-     * @param  array|string|null  $schema
-     * @return array|Schema
+     * Search List of dynamic types
+     * @param  ObjectType $type     [description]
+     * @param  array      $optional [description]
+     * @return [type]               [description]
      */
-    protected function getSchemaConfiguration($schema)
+    public function listType($type, $optional = [])
     {
-        $schemaName = is_string($schema) ? $schema : config('graphql.default_schema', 'default');
-
-        if (! is_array($schema) && ! isset($this->schemas[$schemaName])) {
-            throw new SchemaNotFound('Type '.$schemaName.' not found.');
+        // If the instace type of the given pagination does not exists, create a new one!
+        if (!isset($this->typesInstances[$type->name . 'ListType'])) {
+            $this->typesInstances[$type->name . 'ListType'] = new ListType($type->name, $optional);
         }
 
-        return is_array($schema) ? $schema : $this->schemas[$schemaName];
+        return $this->typesInstances[$type->name . 'ListType'];
+    }
+
+    /**
+     * Search List dynamic field
+     * @param  ListQuery $query
+     * @param  array     $optional
+     * @return array
+     */
+    public function listQuery(ListQuery $query, $optional = [])
+    {
+        $queryAttr = $query->getAttributes();
+
+        unset($queryAttr['name']);
+        unset($queryAttr['resolve']);
+
+        foreach ($optional as $key => $value) {
+            $queryAttr[$key] = $value;
+        }
+
+        return $queryAttr;
     }
 }

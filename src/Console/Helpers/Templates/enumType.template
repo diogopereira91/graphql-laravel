@@ -1,0 +1,17 @@
+<?php
+namespace App\GraphQL\{{ namespace }};
+
+use GraphQLCore\GraphQL\Support\Type as GraphQLType;
+
+class {{ className }} extends GraphQLType {
+    protected $enumObject = true;
+
+    protected $attributes = [
+        'name' => '{{ keyConfig }}',
+	    'description' => '', //Ex: Ordenation about specific 
+	    'values' => [
+    				//'ASC'=>['value'=>'ASC','description'=>'Ascending'],
+    				//'DESC'=>['value'=>'DESC','description'=>'Descending']
+    			]
+    ];
+}

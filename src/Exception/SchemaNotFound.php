@@ -1,11 +1,7 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL\Exception;
 
-namespace Rebing\GraphQL\Exception;
-
-use RuntimeException;
-
-class SchemaNotFound extends RuntimeException
+class SchemaNotFound extends \Exception
 {
 }

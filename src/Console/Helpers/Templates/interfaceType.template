@@ -1,0 +1,45 @@
+<?php
+
+namespace App\GraphQL\{{ namespace }};
+
+use GraphQLCore\GraphQL\Type\Definition\Type;
+use GraphQLCore\GraphQL\Support\Type as GraphQLType;
+use GraphQL;
+use GraphQLCore\GraphQL\Support\InterfaceType;
+
+class {{ className }} extends InterfaceType
+{
+    protected $attributes = [
+        'name' => '{{ keyConfig }}',
+        'description' => ''//Ex: 'class description bla bla bla bla'
+    ];
+
+    public function fields()
+    {
+        /*
+            --------------Example---------------
+            return [
+                'id' => [
+                    'type' => Type::id(),
+                ],
+                'name' => [
+                    'type' => Type::string(),
+                    'description' => 'Name of specific type'
+                ],
+                'sublist' => GraphQL::sublist('sublist'),
+            ];
+         */
+        return [];
+    }
+
+    public function resolveType($root)
+    {
+        /*
+            --------------Example---------------
+            if (!empty($root->idTest)) {
+                return GraphQL::type('Test');
+            }
+            return GraphQL::type('Test1');
+        */
+    }
+}

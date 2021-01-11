@@ -1,0 +1,79 @@
+<?php
+namespace App\GraphQL\{{ namespace }};
+
+use GraphQL;
+use GraphQLCore\GraphQL\Type\Definition\Type;
+use GraphQLCore\GraphQL\Support\{{ typeQuery }};
+
+class {{ className }} extends {{ typeQuery }}
+{
+    protected $attributes = [
+        'name' => '',
+        'description' => '',//Ex: 'Get data from specific table',
+    ];
+
+    /**
+     * Defines type of list
+     * @return [type]
+     */
+    public function itemType()
+    {
+        return Type::string();//Other example ----- > GraphQL::type('type');
+    }
+
+    /**
+     *  Defines a new query to make a search.
+     * @return [type]
+     */
+    public function newModelQuery()
+    {
+        return null;
+    }
+
+    /**
+     * Apply some configurations partilhadas with initial query
+     * This function can be called for searching other types
+     * @param  [type] $query
+     * @return [type]
+     */
+    public function modelQuerySetup($query)
+    {
+        /*
+            -----------Example------------
+            return $query->select('table.*');
+         */
+
+        return null;
+    }
+
+    /**
+     * List of option to order a query
+     * @return array
+     */
+    public function orderByOptions()
+    {
+        /*
+            -----------Example------------
+            return [
+                'ID'     =>['value'=>'table.id'],
+                'NAME' =>['value'=>'table.name'],
+            ];
+         */
+        return [];
+    }
+
+    /**
+     * Filter by field XPTO
+     * @param  [type] $query
+     * @param  string $xtpo
+     * @return [type]
+     */
+    public function filterByXPTO($query,string $xtpo) {
+        /*
+            -----------Example------------
+            $query->where('table.name', 'like', '%'.$xtpo.'%');
+         */
+
+        return $query;
+    }
+}

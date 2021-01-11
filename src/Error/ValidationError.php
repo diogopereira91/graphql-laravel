@@ -1,43 +1,21 @@
 <?php
+namespace GraphQLCore\GraphQL\Error;
 
-declare(strict_types=1);
-
-namespace Rebing\GraphQL\Error;
-
-use GraphQL\Error\ClientAware;
 use GraphQL\Error\Error;
-use Illuminate\Contracts\Support\MessageBag;
-use Illuminate\Contracts\Validation\Validator;
 
-class ValidationError extends Error implements ClientAware
+class ValidationError extends Error
 {
-    /** @var Validator */
-    private $validator;
+    public $validator;
 
-    public function __construct(string $message, Validator $validator)
+    public function setValidator($validator)
     {
-        parent::__construct($message);
-
         $this->validator = $validator;
+
+        return $this;
     }
 
-    public function getValidatorMessages(): MessageBag
+    public function getValidatorMessages()
     {
-        return $this->validator->errors();
-    }
-
-    public function getValidator(): Validator
-    {
-        return $this->validator;
-    }
-
-    public function isClientSafe(): bool
-    {
-        return true;
-    }
-
-    public function getCategory(): string
-    {
-        return 'validation';
+        return $this->validator ? $this->validator->messages():[];
     }
 }

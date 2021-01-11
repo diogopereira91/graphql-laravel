@@ -1,0 +1,25 @@
+<?php
+namespace App\GraphQL\{{ namespace }};
+
+use GraphQL;
+use GraphQLCore\GraphQL\Type\Definition\Type;
+use GraphQLCore\GraphQL\Support\{{ typeQuery }};
+
+class {{ className }} extends {{ typeQuery }}
+{
+    protected $attributes = [
+        'name' => '{{ classNameLCF }}',
+        'description' => '',//Ex: 'Get data from specific table',
+    ];
+
+
+    public function type()
+    {
+        return Type::string(); //Ex ------> GraphQL::type('type');
+    }
+
+    public function resolve($root, $args)
+    {
+        return null;
+    }
+}

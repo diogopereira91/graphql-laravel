@@ -1,22 +1,20 @@
 <?php
 
-declare(strict_types=1);
-
-namespace Rebing\GraphQL\Support;
+namespace GraphQLCore\GraphQL\Support;
 
 use GraphQL\Error\Error;
 use GraphQL\Error\InvariantViolation;
-use GraphQL\Language\AST\Node;
 use GraphQL\Type\Definition\ScalarType;
-use GraphQL\Type\Definition\Type;
-use Rebing\GraphQL\Support\Contracts\TypeConvertible;
+use GraphQL\Utils\Utils;
 
-class UploadType extends ScalarType implements TypeConvertible
+class UploadType extends ScalarType
 {
+
     /**
      * @var string
      */
     public $name = 'Upload';
+
     /**
      * @var string
      */
@@ -24,7 +22,7 @@ class UploadType extends ScalarType implements TypeConvertible
         'The `Upload` special type represents a file to be uploaded in the same HTTP request as specified by
  [graphql-multipart-request-spec](https://github.com/jaydenseric/graphql-multipart-request-spec).';
 
-    public function __construct(string $name = 'Upload')
+    public function __construct($name = 'Upload')
     {
         $this->name = $name;
 
@@ -32,7 +30,11 @@ class UploadType extends ScalarType implements TypeConvertible
     }
 
     /**
-     * {@inheritdoc}
+     * Serializes an internal value to include in a response.
+     *
+     * @param mixed $value
+     *
+     * @return mixed
      */
     public function serialize($value)
     {
@@ -40,7 +42,11 @@ class UploadType extends ScalarType implements TypeConvertible
     }
 
     /**
-     * {@inheritdoc}
+     * Parses an externally provided value (query variable) to use as an input
+     *
+     * @param mixed $value
+     *
+     * @return mixed
      */
     public function parseValue($value)
     {
@@ -48,15 +54,14 @@ class UploadType extends ScalarType implements TypeConvertible
     }
 
     /**
-     * {@inheritdoc}
+     * Parses an externally provided literal value (hardcoded in GraphQL query) to use as an input
+     *
+     * @param \GraphQL\Language\AST\Node $valueNode
+     *
+     * @return mixed
      */
-    public function parseLiteral(Node $valueNode, ?array $variables = null)
+    public function parseLiteral($valueNode, ?array $variables = null)
     {
-        throw new Error('`Upload` cannot be hardcoded in query, be sure to conform to GraphQL multipart request specification. Instead got: '.$valueNode->kind, [$valueNode]);
-    }
-
-    public function toType(): Type
-    {
-        return new static();
+        throw new Error('`Upload` cannot be hardcoded in query, be sure to conform to GraphQL multipart request specification. Instead got: ' . $valueNode->kind, [$valueNode]);
     }
 }

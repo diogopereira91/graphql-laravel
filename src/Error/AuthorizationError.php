@@ -1,21 +1,9 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL\Error;
 
-namespace Rebing\GraphQL\Error;
-
-use GraphQL\Error\ClientAware;
 use GraphQL\Error\Error;
 
-class AuthorizationError extends Error implements ClientAware
-{
-    public function isClientSafe(): bool
-    {
-        return true;
-    }
+class AuthorizationError extends Error {
 
-    public function getCategory(): string
-    {
-        return 'authorization';
-    }
 }
