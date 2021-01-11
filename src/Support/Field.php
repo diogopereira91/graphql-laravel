@@ -1,271 +1,196 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL\Support;
 
-namespace Rebing\GraphQL\Support;
+use GraphQLCore\GraphQL\Error\AuthorizationError;
+use Validator;
+use Illuminate\Support\Fluent;
+use GraphQLCore\GraphQL\Error\ValidationError;
+use GraphQL\Type\Definition\InputObjectType;
+use GraphQL\Type\Definition\ListOfType;
+use GraphQL\Type\Definition\WrappingType;
+use Illuminate\Support\Arr;
 
-use Closure;
-use GraphQL\Type\Definition\ResolveInfo;
-use GraphQL\Type\Definition\Type as GraphQLType;
-use Illuminate\Contracts\Validation\Validator as ValidatorContract;
-use Illuminate\Pipeline\Pipeline;
-use Illuminate\Support\Facades\App;
-use Illuminate\Support\Facades\Validator;
-use InvalidArgumentException;
-use Rebing\GraphQL\Error\AuthorizationError;
-use Rebing\GraphQL\Error\ValidationError;
-use Rebing\GraphQL\Support\AliasArguments\AliasArguments;
-use ReflectionMethod;
-
-/**
- * @property string $name
- */
-abstract class Field
+class Field extends Fluent
 {
-    /**
-     * The depth the SelectField and ResolveInfoFieldsAndArguments classes traverse.
-     *
-     * @var int
-     */
-    protected $depth = 5;
-
-    protected $attributes = [];
-
-    /** @var string[] */
-    protected $middleware = [];
 
     /**
      * Override this in your queries or mutations
-     * to provide custom authorization.
-     *
-     * @param  mixed  $root
-     * @param  array  $args
-     * @param  mixed  $ctx
-     * @param  ResolveInfo|null  $resolveInfo
-     * @param  Closure|null  $getSelectFields
-     * @return bool
+     * to provide custom authorization
      */
-    public function authorize($root, array $args, $ctx, ResolveInfo $resolveInfo = null, Closure $getSelectFields = null): bool
+    public function authorize(array $args)
     {
         return true;
     }
 
-    public function attributes(): array
+    public function attributes()
     {
         return [];
     }
 
-    abstract public function type(): GraphQLType;
+    public function type()
+    {
+        return null;
+    }
 
-    /**
-     * @return array<string,array>
-     */
-    public function args(): array
+    public function args()
     {
         return [];
     }
 
     /**
-     * Define custom Laravel Validator messages as per Laravel 'custom error messages'.
-     *
+     * Define custom Laravel Validator messages as per Laravel 'custom error messages'
      * @param array $args submitted arguments
-     *
      * @return array
      */
-    public function validationErrorMessages(array $args = []): array
+    public function validationErrorMessages(array $args = [])
     {
         return [];
     }
 
-    /**
-     * @param array<string,mixed> $args
-     * @return array<string,mixed>
-     */
-    protected function rules(array $args = []): array
+
+    protected function rules(array $args = [])
     {
         return [];
     }
 
-    /**
-     * @param array<string,mixed> $arguments
-     * @return array<string,mixed>
-     */
-    public function getRules(array $arguments = []): array
+    public function getName()
     {
-        $rules = $this->rules($arguments);
-        $argsRules = (new Rules($this->args(), $arguments))->get();
+        $name = '';
+
+        if (!empty($this->attributes['name'])) {
+            $name = $this->attributes['name'];
+        }
+
+        return $name;
+    }
+
+    public function getRules()
+    {
+        $arguments = func_get_args();
+
+        $rules     = call_user_func_array([$this, 'rules'], $arguments);
+        $argsRules = [];
+        foreach ($this->args() as $name => $arg) {
+            if (isset($arg['rules'])) {
+                if (is_callable($arg['rules'])) {
+                    $argsRules[$name] = $this->resolveRules($arg['rules'], $arguments);
+                } else {
+                    $argsRules[$name] = $arg['rules'];
+                }
+            }
+
+            if (isset($arg['type'])) {
+                $argsRules = array_merge($argsRules, $this->inferRulesFromType($arg['type'], $name, $arguments));
+            }
+        }
 
         return array_merge($argsRules, $rules);
     }
 
-    /**
-     * @param array<string,mixed> $fieldsAndArgumentsSelection
-     * @return void
-     */
-    public function validateFieldArguments(array $fieldsAndArgumentsSelection): void
+    public function resolveRules($rules, $arguments)
     {
-        $argsRules = (new RulesInFields($this->type(), $fieldsAndArgumentsSelection))->get();
-        if (count($argsRules)) {
-            $validator = $this->getValidator($fieldsAndArgumentsSelection, $argsRules);
-            if ($validator->fails()) {
-                throw new ValidationError('validation', $validator);
+        if (is_callable($rules)) {
+            return call_user_func_array($rules, $arguments);
+        }
+
+        return $rules;
+    }
+
+    public function inferRulesFromType($type, $prefix, $resolutionArguments)
+    {
+        $rules = [];
+
+        // if it is an array type, add an array validation component
+        if ($type instanceof ListOfType) {
+            $prefix = "{$prefix}.*";
+        }
+
+        // make sure we are dealing with the actual type
+        if ($type instanceof WrappingType) {
+            $type = $type->getWrappedType();
+        }
+
+        // if it is an input object type - the only type we care about here...
+        if ($type instanceof InputObjectType) {
+            // merge in the input type's rules
+            $rules = array_merge($rules, $this->getInputTypeRules($type, $prefix, $resolutionArguments));
+        }
+
+        // Ignore scalar types
+
+        return $rules;
+    }
+
+    public function getInputTypeRules(InputObjectType $input, $prefix, $resolutionArguments)
+    {
+        $rules = [];
+
+        foreach ($input->getFields() as $name => $field) {
+            $key = "{$prefix}.{$name}";
+
+            // get any explicitly set rules
+            if (isset($field->rules)) {
+                $rules[$key] = $this->resolveRules($field->rules, $resolutionArguments);
             }
+
+            // then recursively call the parent method to see if this is an
+            // input object, passing in the new prefix
+            $rules = array_merge($rules, $this->inferRulesFromType($field->type, $key, $resolutionArguments));
         }
+
+        return $rules;
     }
 
-    public function getValidator(array $args, array $rules): ValidatorContract
+    protected function getResolver()
     {
-        // allow our error messages to be customised
-        $messages = $this->validationErrorMessages($args);
-
-        return Validator::make($args, $rules, $messages);
-    }
-
-    /**
-     * @return array<string>
-     */
-    protected function getMiddleware(): array
-    {
-        return $this->middleware;
-    }
-
-    protected function getResolver(): ?Closure
-    {
-        $resolver = $this->originalResolver();
-
-        if (! $resolver) {
+        if (!method_exists($this, 'resolve')) {
             return null;
         }
 
-        return function ($root, ...$arguments) use ($resolver) {
-            $middleware = $this->getMiddleware();
-
-            return app()->make(Pipeline::class)
-                ->send(array_merge([$this], $arguments))
-                ->through($middleware)
-                ->via('resolve')
-                ->then(function ($arguments) use ($middleware, $resolver, $root) {
-                    $result = $resolver($root, ...array_slice($arguments, 1));
-
-                    foreach ($middleware as $name) {
-                        $instance = app()->make($name);
-
-                        if (method_exists($instance, 'terminate')) {
-                            app()->terminating(function () use ($arguments, $instance, $result) {
-                                $instance->terminate($this, ...array_slice($arguments, 1), ...[$result]);
-                            });
-                        }
-                    }
-
-                    return $result;
-                });
-        };
-    }
-
-    protected function originalResolver(): ?Closure
-    {
-        if (! method_exists($this, 'resolve')) {
-            return null;
-        }
-
-        $resolver = [$this, 'resolve'];
+        $resolver  = [$this, 'resolve'];
         $authorize = [$this, 'authorize'];
-
         return function () use ($resolver, $authorize) {
-            // 0 - the "root" object; `null` for queries, otherwise the parent of a type
-            // 1 - the provided `args` of the query or type (if applicable), empty array otherwise
-            // 2 - the "GraphQL query context" (see \Rebing\GraphQL\GraphQLController::queryContext)
-            // 3 - \GraphQL\Type\Definition\ResolveInfo as provided by the underlying GraphQL PHP library
-            // 4 (!) - added by this library, encapsulates creating a `SelectFields` instance
             $arguments = func_get_args();
 
-            // Validate mutation arguments
-            $args = $arguments[1];
-
-            $rules = $this->getRules($args);
-
-            if (count($rules)) {
-                $validator = $this->getValidator($args, $rules);
-                if ($validator->fails()) {
-                    throw new ValidationError('validation', $validator);
-                }
+            // Get all given arguments
+            if (! is_null($arguments[2]) && is_array($arguments[2])) {
+                $arguments[1] = array_merge($arguments[1], $arguments[2]);
             }
-
-            $fieldsAndArguments = (new ResolveInfoFieldsAndArguments($arguments[3]))->getFieldsAndArgumentsSelection($this->depth);
-
-            // Validate arguments in fields
-            $this->validateFieldArguments($fieldsAndArguments);
-
-            $arguments[1] = $this->getArgs($arguments);
 
             // Authorize
-            if (true != call_user_func_array($authorize, $arguments)) {
-                throw new AuthorizationError($this->getAuthorizationMessage());
+            if (call_user_func($authorize, $arguments[1]) != true) {
+                throw with(new AuthorizationError('Unauthorized'));
             }
 
-            $method = new ReflectionMethod($this, 'resolve');
+            // Validate mutation arguments
+            if (method_exists($this, 'getRules')) {
+                $args  = Arr::get($arguments, 1, []);
+                $rules = call_user_func_array([$this, 'getRules'], [$args]);
+                if (sizeof($rules)) {
+                    // allow our error messages to be customised
+                    $messages = $this->validationErrorMessages($args);
+                    $defaultMessages = config('graphql.validation.messages', []);
+                    $messages = $messages + $defaultMessages;
 
-            $additionalParams = array_slice($method->getParameters(), 3);
-
-            $additionalArguments = array_map(function ($param) use ($arguments, $fieldsAndArguments) {
-                $paramType = $param->getType();
-
-                if ($paramType->isBuiltin()) {
-                    throw new InvalidArgumentException("'{$param->name}' could not be injected");
+                    $validator = Validator::make($args, $rules, $messages);
+                    if ($validator->fails()) {
+                        throw with(new ValidationError('validation'))->setValidator($validator);
+                    }
                 }
+            }
 
-                $className = $param->getType()->getName();
+            // Replace the context argument with 'selects and relations'
+            // $arguments[1] is direct args given with the query
+            // $arguments[2] is context (params given with the query)
+            // $arguments[3] is ResolveInfo
+            if (isset($arguments[3])) {
+                $fields       = new SelectFields($arguments[3], $this->type(), $arguments[1]);
+                $arguments[2] = $fields;
+            }
 
-                if (Closure::class === $className) {
-                    return function (int $depth = null) use ($arguments, $fieldsAndArguments): SelectFields {
-                        return $this->instanciateSelectFields($arguments, $fieldsAndArguments, $depth);
-                    };
-                }
-
-                if (SelectFields::class === $className) {
-                    return $this->instanciateSelectFields($arguments, $fieldsAndArguments, null);
-                }
-
-                if (ResolveInfo::class === $className) {
-                    return $arguments[3];
-                }
-
-                return app()->make($className);
-            }, $additionalParams);
-
-            return call_user_func_array($resolver, array_merge(
-                [$arguments[0], $arguments[1], $arguments[2]],
-                $additionalArguments
-            ));
+            return call_user_func_array($resolver, $arguments);
         };
-    }
-
-    /**
-     * @param array<int,mixed> $arguments
-     * @param int $depth
-     * @param array<string,mixed> $fieldsAndArguments
-     * @return SelectFields
-     */
-    private function instanciateSelectFields(array $arguments, array $fieldsAndArguments, int $depth = null): SelectFields
-    {
-        $ctx = $arguments[2] ?? null;
-
-        if ($depth !== null && $depth !== $this->depth) {
-            $fieldsAndArguments = (new ResolveInfoFieldsAndArguments($arguments[3]))
-                ->getFieldsAndArgumentsSelection($depth);
-        }
-
-        return new SelectFields($this->type(), $arguments[1], $ctx, $fieldsAndArguments);
-    }
-
-    protected function aliasArgs(array $arguments): array
-    {
-        return (new AliasArguments($this->args(), $arguments[1]))->get();
-    }
-
-    protected function getArgs(array $arguments): array
-    {
-        return $this->aliasArgs($arguments);
     }
 
     /**
@@ -273,17 +198,18 @@ abstract class Field
      *
      * @return array
      */
-    public function getAttributes(): array
+    public function getAttributes()
     {
         $attributes = $this->attributes();
 
-        $attributes = array_merge(
-            $this->attributes,
-            ['args' => $this->args()],
-            $attributes
-        );
+        $attributes = array_merge($this->attributes, [
+            'args' => $this->args()
+        ], $attributes);
 
-        $attributes['type'] = $this->type();
+        $type = $this->type();
+        if (isset($type)) {
+            $attributes['type'] = $type;
+        }
 
         $resolver = $this->getResolver();
         if (isset($resolver)) {
@@ -293,17 +219,12 @@ abstract class Field
         return $attributes;
     }
 
-    public function getAuthorizationMessage(): string
-    {
-        return 'Unauthorized';
-    }
-
     /**
      * Convert the Fluent instance to an array.
      *
      * @return array
      */
-    public function toArray(): array
+    public function toArray()
     {
         return $this->getAttributes();
     }
@@ -311,19 +232,36 @@ abstract class Field
     /**
      * Dynamically retrieve the value of an attribute.
      *
-     * @param string $key
-     *
+     * @param  string  $key
      * @return mixed
      */
     public function __get($key)
     {
         $attributes = $this->getAttributes();
-
-        return $attributes[$key] ?? null;
+        return isset($attributes[$key]) ? $attributes[$key]:null;
     }
 
-    public function __set(string $key, $value): void
+    /**
+     * Dynamically check if an attribute is set.
+     *
+     * @param  string  $key
+     * @return void
+     */
+    public function __isset($key)
     {
-        $this->attributes[$key] = $value;
+        $attributes = $this->getAttributes();
+        return isset($attributes[$key]);
+    }
+
+    /**
+     * Get scope about query/mutation
+     *
+     * @return void
+     */
+    public function getScope()
+    {
+        $attrs = $this->attributes;
+
+        return $attrs['scope'] ?? '';
     }
 }

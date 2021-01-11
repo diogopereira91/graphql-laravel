@@ -1,103 +1,108 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL;
 
-namespace Rebing\GraphQL;
-
+use Illuminate\Support\ServiceProvider;
+use GraphQLCore\GraphQL\GraphQL;
+use GraphQLCore\GraphQL\Console\GraphQL\CreateMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\QueryMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\TypeMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\SubListMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\UpdateConfMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\UpdateConfSchemasMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\UpdateConfTypesMakeCommand;
+use GraphQLCore\GraphQL\Console\GraphQL\UpdateConfSublistsMakeCommand;
 use GraphQL\Validator\DocumentValidator;
 use GraphQL\Validator\Rules\DisableIntrospection;
 use GraphQL\Validator\Rules\QueryComplexity;
 use GraphQL\Validator\Rules\QueryDepth;
-use Illuminate\Contracts\Container\Container;
-use Illuminate\Support\ServiceProvider;
-use Rebing\GraphQL\Console\EnumMakeCommand;
-use Rebing\GraphQL\Console\FieldMakeCommand;
-use Rebing\GraphQL\Console\InputMakeCommand;
-use Rebing\GraphQL\Console\InterfaceMakeCommand;
-use Rebing\GraphQL\Console\MiddlewareMakeCommand;
-use Rebing\GraphQL\Console\MutationMakeCommand;
-use Rebing\GraphQL\Console\QueryMakeCommand;
-use Rebing\GraphQL\Console\ScalarMakeCommand;
-use Rebing\GraphQL\Console\TypeMakeCommand;
-use Rebing\GraphQL\Console\UnionMakeCommand;
 
 class GraphQLServiceProvider extends ServiceProvider
 {
+
     /**
      * Bootstrap any application services.
      *
      * @return void
      */
-    public function boot(): void
+    public function boot()
     {
         $this->bootPublishes();
+
+        $this->bootTypes();
+
+        $this->bootSchemas();
 
         $this->bootRouter();
     }
 
     /**
-     * Bootstrap router.
+     * Bootstrap router
      *
      * @return void
      */
-    protected function bootRouter(): void
+    protected function bootRouter()
     {
         if (config('graphql.routes')) {
-            include __DIR__.'/routes.php';
+            include __DIR__ . '/routes.php';
         }
     }
 
     /**
-     * Bootstrap publishes.
+     * Bootstrap publishes
      *
      * @return void
      */
-    protected function bootPublishes(): void
+    protected function bootPublishes()
     {
-        $configPath = __DIR__.'/../config';
+        $configPath = __DIR__ . '/../../config';
 
-        $this->mergeConfigFrom($configPath.'/config.php', 'graphql');
+        $this->mergeConfigFrom($configPath . '/config.php', 'graphql');
 
         $this->publishes([
-            $configPath.'/config.php' => config_path('graphql.php'),
+            $configPath . '/config.php' => config_path('graphql.php'),
         ], 'config');
 
-        $viewsPath = __DIR__.'/../resources/views';
+        $viewsPath = __DIR__ . '/../../resources/views';
         $this->loadViewsFrom($viewsPath, 'graphql');
     }
 
     /**
-     * Add types from config.
+     * Bootstrap publishes
      *
-     * @param  GraphQL  $graphQL
      * @return void
      */
-    protected function bootTypes(GraphQL $graphQL): void
+    protected function bootTypes()
     {
         $configTypes = config('graphql.types');
-        $graphQL->addTypes($configTypes);
-    }
-
-    /**
-     * Add schemas from config.
-     *
-     * @param  GraphQL  $graphQL
-     * @return void
-     */
-    protected function bootSchemas(GraphQL $graphQL): void
-    {
-        $configSchemas = config('graphql.schemas');
-        foreach ($configSchemas as $name => $schema) {
-            $graphQL->addSchema($name, $schema);
+        foreach ($configTypes as $name => $type) {
+            if (is_numeric($name)) {
+                $this->app['graphql']->addType($type);
+            } else {
+                $this->app['graphql']->addType($type, $name);
+            }
         }
     }
 
     /**
-     * Configure security from config.
+     * Add schemas from config
      *
      * @return void
      */
-    protected function applySecurityRules(): void
+    protected function bootSchemas()
+    {
+        $configSchemas = config('graphql.schemas');
+        foreach ($configSchemas as $name => $schema) {
+            $this->app['graphql']->addSchema($name, $schema);
+        }
+    }
+
+    /**
+     * Configure security from config
+     *
+     * @return void
+     */
+    protected function applySecurityRules()
     {
         $maxQueryComplexity = config('graphql.security.query_max_complexity');
         if ($maxQueryComplexity !== null) {
@@ -130,46 +135,38 @@ class GraphQLServiceProvider extends ServiceProvider
     {
         $this->registerGraphQL();
 
-        if ($this->app->runningInConsole()) {
-            $this->registerConsole();
-        }
+        $this->registerConsole();
     }
 
-    public function registerGraphQL(): void
+    public function registerGraphQL()
     {
-        $this->app->singleton('graphql', function (Container $app): GraphQL {
+        $this->app->singleton('graphql', function ($app) {
             $graphql = new GraphQL($app);
 
             $this->applySecurityRules();
 
-            $this->bootSchemas($graphql);
-
             return $graphql;
-        });
-
-        $this->app->afterResolving('graphql', function (GraphQL $graphQL) {
-            $this->bootTypes($graphQL);
         });
     }
 
     /**
-     * Register console commands.
+     * Register console commands
      *
      * @return void
      */
-    public function registerConsole(): void
+    public function registerConsole()
     {
-        $this->commands(EnumMakeCommand::class);
-        $this->commands(FieldMakeCommand::class);
-        $this->commands(InputMakeCommand::class);
-        $this->commands(InterfaceMakeCommand::class);
-        $this->commands(InterfaceMakeCommand::class);
-        $this->commands(MiddlewareMakeCommand::class);
-        $this->commands(MutationMakeCommand::class);
+        // Commands for create classes
+        $this->commands(CreateMakeCommand::class);
         $this->commands(QueryMakeCommand::class);
-        $this->commands(ScalarMakeCommand::class);
         $this->commands(TypeMakeCommand::class);
-        $this->commands(UnionMakeCommand::class);
+        $this->commands(SubListMakeCommand::class);
+
+        // Commands to update config about classes
+        $this->commands(UpdateConfMakeCommand::class);
+        $this->commands(UpdateConfSchemasMakeCommand::class);
+        $this->commands(UpdateConfTypesMakeCommand::class);
+        $this->commands(UpdateConfSublistsMakeCommand::class);
     }
 
     /**

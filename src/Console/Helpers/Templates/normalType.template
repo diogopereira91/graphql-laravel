@@ -1,0 +1,32 @@
+<?php
+
+namespace App\GraphQL\{{ namespace }};
+
+use GraphQLCore\GraphQL\Type\Definition\Type;
+use GraphQLCore\GraphQL\Support\Type as GraphQLType;
+
+class {{ className }} extends GraphQLType
+{
+    protected $attributes = [
+        'name' => '{{ keyConfig }}',
+        'description' => ''//Ex: 'class description'
+    ];
+
+    public function fields()
+    {
+        /*
+            --------------Example---------------
+            return [
+                'id' => [
+                    'type' => Type::id(),
+                ],
+                'name' => [
+                    'type' => Type::string(),
+                    'description' => 'Name of specific type'
+                ],
+                'sublist' => GraphQL::sublist('sublist'),
+            ];
+         */
+        return [];
+    }
+}

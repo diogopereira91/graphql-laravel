@@ -1,41 +1,22 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL\Support;
 
-namespace Rebing\GraphQL\Support;
-
-use Closure;
 use GraphQL\Type\Definition\InterfaceType as BaseInterfaceType;
-use GraphQL\Type\Definition\Type as GraphqlType;
 
-abstract class InterfaceType extends Type
-{
-    protected function getTypeResolver(): ?Closure
+class InterfaceType extends Type {
+
+    protected function getTypeResolver()
     {
-        if (! method_exists($this, 'resolveType')) {
+        if(!method_exists($this, 'resolveType'))
+        {
             return null;
         }
 
-        $resolver = [$this, 'resolveType'];
-
-        return function () use ($resolver) {
+        $resolver = array($this, 'resolveType');
+        return function() use ($resolver)
+        {
             $args = func_get_args();
-
-            return call_user_func_array($resolver, $args);
-        };
-    }
-
-    protected function getTypesResolver(): ?Closure
-    {
-        if (! method_exists($this, 'types')) {
-            return null;
-        }
-
-        $resolver = [$this, 'types'];
-
-        return function () use ($resolver): array {
-            $args = func_get_args();
-
             return call_user_func_array($resolver, $args);
         };
     }
@@ -45,25 +26,22 @@ abstract class InterfaceType extends Type
      *
      * @return array
      */
-    public function getAttributes(): array
+    public function getAttributes()
     {
         $attributes = parent::getAttributes();
 
-        $resolverType = $this->getTypeResolver();
-        if ($resolverType) {
-            $attributes['resolveType'] = $resolverType;
-        }
-
-        $resolverTypes = $this->getTypesResolver();
-        if ($resolverTypes) {
-            $attributes['types'] = $resolverTypes;
+        $resolver = $this->getTypeResolver();
+        if(isset($resolver))
+        {
+            $attributes['resolveType'] = $resolver;
         }
 
         return $attributes;
     }
 
-    public function toType(): GraphqlType
+    public function toType()
     {
         return new BaseInterfaceType($this->toArray());
     }
+
 }

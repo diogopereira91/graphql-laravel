@@ -1,120 +1,84 @@
 <?php
+namespace GraphQLCore\GraphQL;
 
-declare(strict_types=1);
-
-namespace Rebing\GraphQL;
-
-use Exception;
-use Illuminate\Container\Container;
-use Illuminate\Contracts\View\View;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 
-class GraphQLController extends Controller
-{
-    /** @var Container */
-    protected $app;
+use GraphQLCore\GraphQL\GraphQLUploadMiddleware;
 
-    public function __construct(Container $app)
-    {
-        $this->app = $app;
-    }
+use Illuminate\Support\Arr;
 
-    public function query(Request $request, string $schema = null): JsonResponse
+class GraphQLController extends Controller {
+
+    public function query(Request $request, $schema = null)
     {
         $middleware = new GraphQLUploadMiddleware();
         $request = $middleware->processRequest($request);
 
         // If there are multiple route params we can expect that there
         // will be a schema name that has to be built
-        $routeParameters = $this->getRouteParameters($request);
-        if (count($routeParameters) > 1) {
-            $schema = implode('/', $routeParameters);
+        if ($request->route()->parameters && count($request->route()->parameters) > 1) {
+            $schema = implode('/', $request->route()->parameters);
         }
 
-        if (! $schema) {
+        if( ! $schema)
+        {
             $schema = config('graphql.default_schema');
         }
 
         // If a singular query was not found, it means the queries are in batch
         $isBatch = ! $request->has('query');
-        $inputs = $isBatch ? $request->input() : [$request->input()];
+        $batch = $isBatch ? $request->all() : [$request->all()];
 
         $completedQueries = [];
+        $paramsKey = config('graphql.params_key');
+
+        $opts = [
+            'context'   => $this->queryContext(),
+            'schema'    => $schema,
+        ];
 
         // Complete each query in order
-        foreach ($inputs as $input) {
-            $completedQueries[] = $this->executeQuery($schema, $input ?: []);
+        foreach($batch as $batchItem)
+        {
+            $query = $batchItem['query'];
+            $params = Arr::get($batchItem, $paramsKey);
+
+            if(is_string($params))
+            {
+                $params = json_decode($params, true);
+            }
+
+            $completedQueries[] = app('graphql')->query($query, $params, array_merge($opts, [
+                'operationName' => Arr::get($batchItem, 'operationName'),
+            ]));
         }
 
-        $data = $isBatch ? $completedQueries : $completedQueries[0];
-
-        $headers = config('graphql.headers', []);
-        $jsonOptions = config('graphql.json_encoding_options', 0);
-
-        return response()->json($data, 200, $headers, $jsonOptions);
+        return $isBatch ? $completedQueries : $completedQueries[0];
     }
 
-    protected function executeQuery(string $schema, array $input): array
-    {
-        $query = $input['query'] ?? '';
-
-        $paramsKey = config('graphql.params_key', 'variables');
-        $params = $input[$paramsKey] ?? null;
-        if (is_string($params)) {
-            $params = json_decode($params, true);
-        }
-
-        return $this->app->make('graphql')->query(
-            $query,
-            $params,
-            [
-                'context' => $this->queryContext($query, $params, $schema),
-                'schema' => $schema,
-                'operationName' => $input['operationName'] ?? null,
-            ]
-        );
-    }
-
-    protected function queryContext(string $query, ?array $params, string $schema)
+    protected function queryContext()
     {
         try {
-            return $this->app->make('auth')->user();
-        } catch (Exception $e) {
+            return app('auth')->user();
+        } catch (\Exception $e) {
             return null;
         }
     }
 
-    public function graphiql(Request $request, string $schema = null): View
+    public function graphiql(Request $request, $schema = null)
     {
         $graphqlPath = '/'.config('graphql.prefix');
-        if ($schema) {
-            $graphqlPath .= '/'.$schema;
+        if ($schema)
+        {
+            $graphqlPath .= '/' . $schema;
         }
 
         $view = config('graphql.graphiql.view', 'graphql::graphiql');
-
         return view($view, [
             'graphql_schema' => 'graphql_schema',
-            'graphqlPath' => $graphqlPath,
-            'schema' => $schema,
+            'graphqlPath' => $graphqlPath
         ]);
     }
 
-    /**
-     * @param  Request  $request
-     * @return array<string,string>
-     */
-    protected function getRouteParameters(Request $request): array
-    {
-        if (Helpers::isLumen()) {
-            /** @var array<int,mixed> $route */
-            $route = $request->route();
-
-            return $route[2] ?? [];
-        }
-
-        return $request->route()->parameters;
-    }
 }

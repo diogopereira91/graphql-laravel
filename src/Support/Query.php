@@ -1,9 +1,7 @@
 <?php
 
-declare(strict_types=1);
+namespace GraphQLCore\GraphQL\Support;
 
-namespace Rebing\GraphQL\Support;
+class Query extends Field {
 
-abstract class Query extends Field
-{
 }
